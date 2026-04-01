@@ -2,6 +2,9 @@
 
 import argparse
 import socket
+import ssl
+from requests.exceptions import SSLError
+
 
 DEFAULT_SERVER = "fakebook.khoury.northeastern.edu"
 DEFAULT_PORT = 443
@@ -14,20 +17,33 @@ class Crawler:
         self.password = args.password
 
     def run(self):
-        request = "GET / HTTP/1.0\r\n\r\n"
+        try:
+            request = "GET /fakebook/ HTTP/1.1\r\nHost: fakebook.khoury.northeastern.edu\r\n\r\n"
 
-        print("Request to %s:%d" % (self.server, self.port))
-        print(request)
-        mysocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        mysocket.connect((self.server, self.port))
-        mysocket.send(request.encode('ascii'))
+            print("Request to %s:%d" % (self.server, self.port))
+            print(request)
+        
+            mysocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-        data = mysocket.recv(1000)
-        # if length of data is zero, the server has closed the connection
-        if len(data) == 0:
-            print("Response:\nSocket closed by %s" % self.server)
-        else:
-            print("Response:\n%s" % data.decode('ascii'))
+            context = ssl.create_default_context()
+
+            client = context.wrap_socket(mysocket, server_hostname=self.server)
+
+            client.connect((self.server, self.port))
+            client.send(request.encode('ascii'))
+
+            data = client.recv(4096)
+            decoded_data = data.decode('ascii')
+            # if length of data is zero, the server has closed the connection
+            if len(data) == 0:
+                print("Response:\nSocket closed by %s" % self.server)
+            elif "400" in decoded_data:
+                print(f"400 error response: {decoded_data}")
+            elif "200" in decoded_data:
+                print(f"200 response. success") 
+
+        except SSLError as e:
+            print("SSL Error: %s" % e)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='crawl Fakebook')
