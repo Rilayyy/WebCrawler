@@ -4,7 +4,7 @@ import socket
 import ssl
 
 class HttpClient: 
-    __init__(self): 
+    def __init__(self): 
 
         self.server = "fakebook.khoury.northeastern.edu"
         self.port = 443
@@ -14,28 +14,17 @@ class HttpClient:
 
     def connect(self):
 
-        context = ssl.create_default_context()
+        mysocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-        with socket.create_connection((self.server, self.port)) as sock:
-            with context.wrap_socket(sock, server_hostname=self.server) as ssock:
-                
-                request = "GET /fakebook/ HTTP/1.1\r\nHost: fakebook.khoury.northeastern.edu\r\n\r\n"
-                ssock.send(request.encode('ascii'))
+        ssock = self.ssl_context.wrap_socket(mysocket, server_hostname=self.server)
 
-                data = ssock.recv(4096)
-                decoded_data = data.decode('ascii')
-                # if length of data is zero, the server has closed the connection
-                if len(data) == 0:
-                    print("Response:\nSocket closed by %s" % self.server)
-                elif "400" in decoded_data:
-                    print(f"400 error response: {decoded_data}")
-                elif "200" in decoded_data:
-                    print(f"200 response. success")
+        self.client = ssock
 
+        self.client.connect((self.server, self.port))
 
-    def send_request(self, method, path):
+    def send_request(self, method, path, body = None):
         
-        request_line = f"{method} /fakebook/ HTTP/1.\r\n"
+        request_line = f"{method} {path} HTTP/1.1\r\n"
         request_line += f"Host: {self.server}\r\n"
         request_line += "Connection: keep-alive\r\n"
 
@@ -54,12 +43,12 @@ class HttpClient:
         if body:
             request_line += body
 
-        self.client.send(request_line.encode('ascii'))
+        self.client.send(request_line.encode('utf-8'))
 
     def recive_response(self):
 
         data = self.client.recv(4096)
-        decoded_data = data.decode('ascii')
+        decoded_data = data.decode('utf-8')
         if len(data) == 0:
             print("Response:\nSocket closed by %s" % self.server)
         elif "400" in decoded_data:
@@ -68,13 +57,29 @@ class HttpClient:
             print(f"200 response. success")
 
     def decode_chunked(self, body):
-
         clean_html = ""
         cursor = 0
 
         while True: 
 
+            newline = body.find("\r\n", cursor)
 
+            chunk_size = int(body[cursor:newline], 16)
+            cursor = newline + 2
 
+            if chunk_size == 0:
+                break
 
+            clean_html += body[cursor:cursor+chunk_size]
+            cursor += chunk_size
+
+            cursor += 2
+
+        return clean_html
+
+    if __name__ == "__main__":
+        client = HttpClient()
+        client.connect()
+        client.send_request("GET", "/fakebook/")
+        client.recive_response()
 
