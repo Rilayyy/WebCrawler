@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+
+import argparse
+import socket
+import ssl
+from HttpClient import HttpClient
+
+
+DEFAULT_SERVER = "fakebook.khoury.northeastern.edu"
+DEFAULT_PORT = 443
+
+class Crawler:
+    def __init__(self, args):
+        self.server = args.server
+        self.port = args.port
+        self.username = args.username
+        self.password = args.password
+        self.net_client = HttpClient()
+
+    def run(self):
+
+        try:
+            self.net_client.connect()
+
+            self.net_client.send_request("GET", "/fakebook")
+            self.net_client.recive_response()
+
+            self.net_client.send_request("POST", "/accounts/login/?next=fakebook", f"username={self.username}&password={self.password}")
+            self.net_client.recive_response()
+
+            self.net_client.send_request("GET", "/")
+            self.net_client.recive_response()
+
+        except ssl.SSLError as e:
+            print("SSL Error: %s" % e)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='crawl Fakebook')
+    parser.add_argument('-s', dest="server", type=str, default=DEFAULT_SERVER, help="The server to crawl")
+    parser.add_argument('-p', dest="port", type=int, default=DEFAULT_PORT, help="The port to use")
+    parser.add_argument('username', type=str, help="The username to use")
+    parser.add_argument('password', type=str, help="The password to use")
+    args = parser.parse_args()
+    sender = Crawler(args)
+    sender.run()
