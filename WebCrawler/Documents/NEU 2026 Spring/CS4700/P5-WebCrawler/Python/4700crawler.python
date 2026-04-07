@@ -3,11 +3,34 @@
 import argparse
 import socket
 import ssl
+import re
+from html.parser import HTMLParser
+from urllib.parse import urljoin, urlparse
+from collections import deque
 from HttpClient import HttpClient
 
 
 DEFAULT_SERVER = "fakebook.khoury.northeastern.edu"
 DEFAULT_PORT = 443
+
+class LinkExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.links = []
+        self.flags = []
+    
+    def handle_starttag(self, tag, attrs):
+        if tag == 'a':
+            for attr, value in attrs:
+                if attr == 'href':
+                    self.links.append(value)
+    
+    def handle_data(self, data):
+        # Look for secret flags in text content
+        flag_pattern = r'FLAG: [a-zA-Z0-9]{64}'
+        matches = re.findall(flag_pattern, data)
+        for match in matches:
+            self.flags.append(match)
 
 class Crawler:
     def __init__(self, args):
@@ -16,6 +39,10 @@ class Crawler:
         self.username = args.username
         self.password = args.password
         self.net_client = HttpClient()
+        self.visited_urls = set()
+        self.frontier = deque()
+        self.found_flags = []
+        self.base_url = f"https://{self.server}"
 
     def run(self):
 
@@ -60,6 +87,9 @@ class Crawler:
             if response:
                 print(f"Authenticated response status: {response['status_code']}")
                 print(f"Authenticated body: {response['body'][:500]}")
+                
+                # Start crawling from here
+                self.start_crawling(response['body'])
             self.net_client.client.close()
 
         except ssl.SSLError as e:
@@ -73,6 +103,79 @@ class Crawler:
         if match:
             return match.group(1)
         return None
+
+    def start_crawling(self, initial_html):
+        """Start the web crawler from the initial authenticated page"""
+        print("=== Starting Web Crawler ===")
+        
+        # Process initial page
+        self.process_page("/fakebook/", initial_html)
+        
+        # Crawl until we find 5 flags or exhaust frontier
+        while self.frontier and len(self.found_flags) < 5:
+            url = self.frontier.popleft()
+            if url not in self.visited_urls:
+                self.crawl_page(url)
+        
+        # Output found flags
+        print(f"\n=== Found {len(self.found_flags)} flags ===")
+        for flag in self.found_flags:
+            print(flag)
+
+    def process_page(self, url, html):
+        """Extract links and flags from a page"""
+        print(f"Processing page: {url}")
+        
+        # Mark as visited
+        self.visited_urls.add(url)
+        
+        # Extract links and flags
+        parser = LinkExtractor()
+        parser.feed(html)
+        
+        # Add found flags
+        for flag in parser.flags:
+            if flag not in self.found_flags:
+                self.found_flags.append(flag)
+                print(f"Found flag: {flag}")
+        
+        # Process links
+        for link in parser.links:
+            full_url = urljoin(self.base_url, link)
+            
+            # Only crawl URLs from the target domain
+            parsed = urlparse(full_url)
+            if parsed.netloc == self.server:
+                # Convert to path format for requests
+                if full_url.startswith(self.base_url):
+                    path = full_url[len(self.base_url):]
+                    # Skip logout link to preserve session
+                    if path and path != "/accounts/logout/" and path not in self.visited_urls and path not in self.frontier:
+                        self.frontier.append(path)
+                        print(f"Added to frontier: {path}")
+
+    def crawl_page(self, path):
+        """Crawl a single page"""
+        print(f"Crawling: {path}")
+        
+        try:
+            self.net_client.connect()
+            self.net_client.send_request("GET", path)
+            response = self.net_client.recive_response()
+            
+            if response and response['status_code'] == '200':
+                self.process_page(path, response['body'])
+            elif response and response['status_code'] == '302' and response['location']:
+                # Handle redirect
+                print(f"Redirecting to: {response['location']}")
+                self.crawl_page(response['location'])
+            else:
+                print(f"Failed to crawl {path}: {response['status_code'] if response else 'No response'}")
+                
+        except Exception as e:
+            print(f"Error crawling {path}: {e}")
+        finally:
+            self.net_client.client.close()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='crawl Fakebook')
