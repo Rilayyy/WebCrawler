@@ -15,40 +15,71 @@ DEFAULT_SERVER = "fakebook.khoury.northeastern.edu"
 DEFAULT_PORT = 443
 
 class LinkExtractor(HTMLParser):
+    """
+    HTML parser that extracts links and secret flags from web pages.
+    
+    Inherits from HTMLParser to safely parse HTML without using forbidden libraries.
+    Extracts:
+    - All href attributes from <a> tags for crawling
+    - Secret flags matching the pattern: FLAG: [64-character alphanumeric]
+    """
+    
     def __init__(self):
         super().__init__()
-        self.links = []
-        self.flags = []
+        self.links = []      # Store extracted URLs
+        self.flags = []      # Store found secret flags
     
     def handle_starttag(self, tag, attrs):
+        """Extract href attributes from anchor tags."""
         if tag == 'a':
             for attr, value in attrs:
                 if attr == 'href':
                     self.links.append(value)
     
     def handle_data(self, data):
-        # Look for secret flags in text content
+        """Search text content for secret flags using regex pattern."""
+        # Secret flags are 64-character alphanumeric strings prefixed with "FLAG: "
         flag_pattern = r'FLAG: [a-zA-Z0-9]{64}'
         matches = re.findall(flag_pattern, data)
         for match in matches:
             self.flags.append(match)
 
 class Crawler:
+    """
+    Main web crawler class that handles authentication and page crawling.
+    
+    Manages the complete crawling process:
+    1. Authentication via HTTP POST with CSRF tokens
+    2. Session management with cookies
+    3. Frontier management (URL queue)
+    4. Visited URL tracking to prevent infinite loops
+    5. Link extraction and flag discovery
+    """
+    
     def __init__(self, args):
-        self.server = args.server
-        self.port = args.port
-        self.username = args.username
-        self.password = args.password
-        self.net_client = HttpClient()
-        self.visited_urls = set()
-        self.frontier = deque()
-        self.found_flags = []
-        self.base_url = f"https://{self.server}"
+        """Initialize crawler with command line arguments."""
+        self.server = args.server                    # Target server hostname
+        self.port = args.port                        # Target server port (443 for HTTPS)
+        self.username = args.username                # Fakebook username
+        self.password = args.password                # Fakebook password
+        self.net_client = HttpClient()               # HTTP client for requests
+        self.visited_urls = set()                    # Track visited URLs to prevent loops
+        self.frontier = deque()                      # Queue of URLs to crawl
+        self.found_flags = []                        # List of discovered secret flags
+        self.base_url = f"https://{self.server}"     # Base URL for resolving relative links
 
     def run(self):
-
+        """
+        Main crawler execution method.
+        
+        Executes the complete crawling workflow:
+        1. GET login page to extract CSRF token
+        2. POST login credentials with CSRF token
+        3. GET authenticated page to start crawling
+        4. Begin systematic crawling of Fakebook
+        """
         try:
-            # First request - get login page to extract CSRF token
+            # Step 1: Get login page and extract CSRF token
             self.net_client.connect()
             self.net_client.send_request("GET", "/accounts/login/?next=/fakebook/")
             response = self.net_client.recive_response()
@@ -56,22 +87,21 @@ class Crawler:
                 csrf_token = self.extract_csrf_token(response['body'])
             self.net_client.client.close()
 
-            # Second request - post login credentials
+            # Step 2: Post login credentials with CSRF token
             self.net_client.connect()
             login_data = f"username={self.username}&password={self.password}"
             if csrf_token:
                 login_data += f"&csrfmiddlewaretoken={csrf_token}"
-            login_data += "&next=%2Ffakebook%2F"  # URL encoded
+            login_data += "&next=%2Ffakebook%2F"  # URL encoded redirect parameter
             self.net_client.send_request("POST", "/accounts/login/?next=/fakebook/", login_data)
             response = self.net_client.recive_response()
             self.net_client.client.close()
 
-            # Third request - get authenticated page and start crawling
+            # Step 3: Get authenticated page and start crawling
             self.net_client.connect()
             self.net_client.send_request("GET", "/fakebook/")
             response = self.net_client.recive_response()
             if response:
-                # Start crawling from here
                 self.start_crawling(response['body'])
             self.net_client.client.close()
 
@@ -79,8 +109,17 @@ class Crawler:
             print("SSL Error: %s" % e)
 
     def extract_csrf_token(self, html):
+        """
+        Extract CSRF token from login page HTML.
+        
+        Args:
+            html (str): HTML content of the login page
+            
+        Returns:
+            str or None: CSRF token value if found, None otherwise
+        """
         import re
-        # Look for CSRF token in hidden input
+        # Django forms include CSRF tokens as hidden inputs with this pattern
         pattern = r"name=['\"]csrfmiddlewaretoken['\"]\s+value=['\"]([^'\"]+)['\"]"
         match = re.search(pattern, html)
         if match:
@@ -88,95 +127,129 @@ class Crawler:
         return None
 
     def start_crawling(self, initial_html):
-        """Start the web crawler from the initial authenticated page"""
+        """
+        Initialize and execute the web crawling process.
         
-        # Process initial page
+        Args:
+            initial_html (str): HTML content of the authenticated starting page
+        """
+        # Process initial page to extract initial links and flags
         self.process_page("/fakebook/", initial_html)
         
-        # Crawl until we find 5 flags or exhaust frontier
+        # Continue crawling until we find 5 flags or exhaust all URLs
         while self.frontier and len(self.found_flags) < 5:
             url = self.frontier.popleft()
             if url not in self.visited_urls:
                 self.crawl_page(url)
         
-        # Output found flags (only this output should appear)
+        # Output found flags (only this output should appear on STDOUT)
         for flag in self.found_flags:
             print(flag)
 
     def process_page(self, url, html):
-        """Extract links and flags from a page"""
+        """
+        Process a crawled page to extract links and flags.
         
-        # Mark as visited
+        Args:
+            url (str): The URL of the page being processed
+            html (str): HTML content of the page
+        """
+        # Mark this URL as visited to prevent re-crawling
         self.visited_urls.add(url)
         
-        # Extract links and flags
+        # Parse HTML to extract links and flags
         parser = LinkExtractor()
         parser.feed(html)
         
-        # Add found flags
+        # Add any newly discovered flags to our collection
         for flag in parser.flags:
             if flag not in self.found_flags:
                 self.found_flags.append(flag)
         
-        # Process links
+        # Process extracted links and add valid ones to frontier
         for link in parser.links:
             full_url = urljoin(self.base_url, link)
             
-            # Only crawl URLs from the target domain
+            # Only crawl URLs from the target Fakebook domain
             parsed = urlparse(full_url)
             if parsed.netloc == self.server:
-                # Convert to path format for requests
+                # Convert full URL to path format for HTTP requests
                 if full_url.startswith(self.base_url):
                     path = full_url[len(self.base_url):]
-                    # Skip logout link to preserve session
+                    # Skip logout link to preserve authentication session
+                    # Also avoid already visited URLs and duplicates in frontier
                     if path and path != "/accounts/logout/" and path not in self.visited_urls and path not in self.frontier:
                         self.frontier.append(path)
 
     def crawl_page(self, path):
-        """Crawl a single page with 503 retry logic"""
+        """
+        Crawl a single page with 503 retry logic and proper error handling.
+        
+        Implements the assignment requirement for 503 Service Unavailable handling
+        with exponential backoff retry strategy.
+        
+        Args:
+            path (str): URL path to crawl (e.g., "/fakebook/user123/")
+        """
         max_retries = 3
         retry_delay = 1  # Start with 1 second delay
         
         for attempt in range(max_retries):
             try:
+                # Establish fresh connection for each request
                 self.net_client.connect()
                 self.net_client.send_request("GET", path)
                 response = self.net_client.recive_response()
                 
                 if response and response['status_code'] == '200':
+                    # Success: process the page content
                     self.process_page(path, response['body'])
                     return
                 elif response and response['status_code'] == '302' and response['location']:
-                    # Handle redirect
+                    # Redirect: follow the new location
                     self.crawl_page(response['location'])
                     return
                 elif response and response['status_code'] == '503':
+                    # Service Unavailable: retry with exponential backoff
                     if attempt < max_retries - 1:
                         time.sleep(retry_delay)
-                        retry_delay *= 2  # Exponential backoff
+                        retry_delay *= 2  # Exponential backoff: 1s -> 2s -> 4s
                         continue
                     else:
-                        return  # Max retries reached
+                        return  # Max retries reached, abandon URL
                 else:
-                    # 403, 404, or other errors - abandon URL
+                    # 403 Forbidden, 404 Not Found, or other errors: abandon URL
                     return
                     
             except Exception as e:
+                # Network error: retry with exponential backoff
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
                     retry_delay *= 2
                     continue
                 else:
-                    return
+                    return  # Max retries reached, abandon URL
             finally:
+                # Always close the connection
                 self.net_client.client.close()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='crawl Fakebook')
-    parser.add_argument('-s', dest="server", type=str, default=DEFAULT_SERVER, help="The server to crawl")
-    parser.add_argument('-p', dest="port", type=int, default=DEFAULT_PORT, help="The port to use")
-    parser.add_argument('username', type=str, help="The username to use")
-    parser.add_argument('password', type=str, help="The password to use")
+    """
+    Main entry point for the web crawler.
+    
+    Parses command line arguments and initializes the crawler.
+    Usage: python3 4700crawler.python [-s server] [-p port] username password
+    """
+    parser = argparse.ArgumentParser(description='CS4700 Fakebook Web Crawler')
+    parser.add_argument('-s', dest="server", type=str, default=DEFAULT_SERVER, 
+                       help="Fakebook server hostname (default: fakebook.khoury.northeastern.edu)")
+    parser.add_argument('-p', dest="port", type=int, default=DEFAULT_PORT, 
+                       help="Server port (default: 443 for HTTPS)")
+    parser.add_argument('username', type=str, help="Fakebook username")
+    parser.add_argument('password', type=str, help="Fakebook password")
+    
     args = parser.parse_args()
-    sender = Crawler(args)
-    sender.run()
+    
+    # Initialize and run the crawler
+    crawler = Crawler(args)
+    crawler.run()
