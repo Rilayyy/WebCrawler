@@ -48,7 +48,6 @@ class HttpClient:
         if body:
             request += body
 
-        print(f"Sending request: {method} {path}")
         self.client.send(request.encode('utf-8'))
 
     def recive_response(self):
@@ -81,9 +80,6 @@ class HttpClient:
         else:
             status_code = "Unknown"
         
-        print(f"Status Code: {status_code}")
-        print(f"All headers: {headers}")
-        
         # Extract cookies and location
         location = None
         for line in lines[1:]:
@@ -93,16 +89,12 @@ class HttpClient:
                     cookie_name, cookie_value = cookie_data.split("=", 1)
                     cookie_value = cookie_value.split(";")[0].strip()
                     self.cookie_jar[cookie_name] = cookie_value
-                    print(f"Cookie extracted: {cookie_name}={cookie_value}")
             elif line.startswith("Location:"):
                 location = line[10:].strip()
-                print(f"Redirect location: {location}")
         
         # Handle chunked encoding
         if "Transfer-Encoding: chunked" in headers:
             body = self.decode_chunked(body)
-        
-        print(f"Body length: {len(body)} characters")
         
         return {
             'status_code': status_code,

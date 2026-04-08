@@ -7,6 +7,7 @@ import re
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 from collections import deque
+import time
 from HttpClient import HttpClient
 
 
@@ -48,46 +49,28 @@ class Crawler:
 
         try:
             # First request - get login page to extract CSRF token
-            print("=== GET login page ===")
             self.net_client.connect()
             self.net_client.send_request("GET", "/accounts/login/?next=/fakebook/")
             response = self.net_client.recive_response()
             if response:
-                print(f"Login page status: {response['status_code']}")
-                print(f"Full login page body:\n{response['body']}")
-                
-                # Extract CSRF token from login page
                 csrf_token = self.extract_csrf_token(response['body'])
-                print(f"CSRF token: {csrf_token}")
-                print(f"Cookies after GET: {self.net_client.cookie_jar}")
-            # Don't close connection - keep session alive
             self.net_client.client.close()
 
-            # Second request - login with CSRF token and same session
-            print("\n=== POST to login ===")
+            # Second request - post login credentials
             self.net_client.connect()
             login_data = f"username={self.username}&password={self.password}"
             if csrf_token:
                 login_data += f"&csrfmiddlewaretoken={csrf_token}"
             login_data += "&next=%2Ffakebook%2F"  # URL encoded
-            print(f"Login data: {login_data}")
-            print(f"Cookies for POST: {self.net_client.cookie_jar}")
             self.net_client.send_request("POST", "/accounts/login/?next=/fakebook/", login_data)
             response = self.net_client.recive_response()
-            if response:
-                print(f"Login response status: {response['status_code']}")
-                print(f"Login response body: {response['body'][:500]}")
             self.net_client.client.close()
 
-            # Third request - get authenticated page
-            print("\n=== GET after login ===")
+            # Third request - get authenticated page and start crawling
             self.net_client.connect()
             self.net_client.send_request("GET", "/fakebook/")
             response = self.net_client.recive_response()
             if response:
-                print(f"Authenticated response status: {response['status_code']}")
-                print(f"Authenticated body: {response['body'][:500]}")
-                
                 # Start crawling from here
                 self.start_crawling(response['body'])
             self.net_client.client.close()
@@ -106,7 +89,6 @@ class Crawler:
 
     def start_crawling(self, initial_html):
         """Start the web crawler from the initial authenticated page"""
-        print("=== Starting Web Crawler ===")
         
         # Process initial page
         self.process_page("/fakebook/", initial_html)
@@ -117,14 +99,12 @@ class Crawler:
             if url not in self.visited_urls:
                 self.crawl_page(url)
         
-        # Output found flags
-        print(f"\n=== Found {len(self.found_flags)} flags ===")
+        # Output found flags (only this output should appear)
         for flag in self.found_flags:
             print(flag)
 
     def process_page(self, url, html):
         """Extract links and flags from a page"""
-        print(f"Processing page: {url}")
         
         # Mark as visited
         self.visited_urls.add(url)
@@ -137,7 +117,6 @@ class Crawler:
         for flag in parser.flags:
             if flag not in self.found_flags:
                 self.found_flags.append(flag)
-                print(f"Found flag: {flag}")
         
         # Process links
         for link in parser.links:
@@ -152,30 +131,45 @@ class Crawler:
                     # Skip logout link to preserve session
                     if path and path != "/accounts/logout/" and path not in self.visited_urls and path not in self.frontier:
                         self.frontier.append(path)
-                        print(f"Added to frontier: {path}")
 
     def crawl_page(self, path):
-        """Crawl a single page"""
-        print(f"Crawling: {path}")
+        """Crawl a single page with 503 retry logic"""
+        max_retries = 3
+        retry_delay = 1  # Start with 1 second delay
         
-        try:
-            self.net_client.connect()
-            self.net_client.send_request("GET", path)
-            response = self.net_client.recive_response()
-            
-            if response and response['status_code'] == '200':
-                self.process_page(path, response['body'])
-            elif response and response['status_code'] == '302' and response['location']:
-                # Handle redirect
-                print(f"Redirecting to: {response['location']}")
-                self.crawl_page(response['location'])
-            else:
-                print(f"Failed to crawl {path}: {response['status_code'] if response else 'No response'}")
+        for attempt in range(max_retries):
+            try:
+                self.net_client.connect()
+                self.net_client.send_request("GET", path)
+                response = self.net_client.recive_response()
                 
-        except Exception as e:
-            print(f"Error crawling {path}: {e}")
-        finally:
-            self.net_client.client.close()
+                if response and response['status_code'] == '200':
+                    self.process_page(path, response['body'])
+                    return
+                elif response and response['status_code'] == '302' and response['location']:
+                    # Handle redirect
+                    self.crawl_page(response['location'])
+                    return
+                elif response and response['status_code'] == '503':
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                        continue
+                    else:
+                        return  # Max retries reached
+                else:
+                    # 403, 404, or other errors - abandon URL
+                    return
+                    
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                else:
+                    return
+            finally:
+                self.net_client.client.close()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='crawl Fakebook')
