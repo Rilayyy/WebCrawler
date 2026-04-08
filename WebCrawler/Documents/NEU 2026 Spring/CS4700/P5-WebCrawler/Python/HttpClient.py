@@ -179,9 +179,9 @@ class HttpClient:
             
         return clean_html
 
-    if __name__ == "__main__":
-        client = HttpClient()
-        client.connect()
-        client.send_request("GET", "/fakebook/")
-        client.recive_response()
+if __name__ == "__main__":
+    client = HttpClient()
+    client.connect()
+    client.send_request("GET", "/fakebook/")
+    client.recive_response()
 
