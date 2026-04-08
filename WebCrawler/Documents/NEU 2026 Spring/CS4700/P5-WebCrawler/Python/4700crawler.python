@@ -42,7 +42,9 @@ class LinkExtractor(HTMLParser):
         flag_pattern = r'FLAG: [a-zA-Z0-9]{64}'
         matches = re.findall(flag_pattern, data)
         for match in matches:
-            self.flags.append(match)
+            # Strip "FLAG: " prefix, store only the 64-character flag
+            flag_only = match[6:]  # Remove "FLAG: " (6 characters)
+            self.flags.append(flag_only)
 
 class Crawler:
     """
