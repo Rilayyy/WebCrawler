@@ -12,16 +12,16 @@ class HttpClient:
     - TLS/SSL connection wrapping for HTTPS
     - HTTP/1.1 request formatting with required headers
     - Response parsing and status code handling
-    - Cookie extraction and management for session persistence
+    - Cookie extraction and management for sessions
     - Chunked transfer encoding decoding
     """
     
     def __init__(self):
         """Initialize HTTP client with default Fakebook settings."""
-        self.server = "fakebook.khoury.northeastern.edu"  # Target server
-        self.port = 443                                   # HTTPS port
-        self.cookie_jar = {}                              # Store session cookies
-        self.ssl_context = ssl.create_default_context()   # SSL context for TLS
+        self.server = "fakebook.khoury.northeastern.edu"  
+        self.port = 443                             
+        self.cookie_jar = {}                              
+        self.ssl_context = ssl.create_default_context()  
 
     def connect(self):
         """
@@ -30,15 +30,12 @@ class HttpClient:
         Creates a TCP socket, wraps it with SSL/TLS, and connects to the server.
         This implements the HTTP over TLS over TCP stack required by HTTPS.
         """
-        # Create TCP socket for network communication
         mysocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         
-        # Wrap socket with SSL/TLS for secure HTTPS communication
         ssock = self.ssl_context.wrap_socket(mysocket, server_hostname=self.server)
         
         self.client = ssock
         
-        # Connect to the server
         self.client.connect((self.server, self.port))
 
     def send_request(self, method, path, body=None):
@@ -46,50 +43,42 @@ class HttpClient:
         Send HTTP/1.1 request to the server.
         
         Implements HTTP/1.1 protocol with required headers including:
-        - Host header (required for HTTP/1.1)
-        - Connection: close (simplifies response handling)
+        - Host header
+        - Connection: close 
         - User-Agent for identification
-        - Referer for POST requests (CSRF protection)
+        - Referer for POST requests 
         - Cookie header for session management
         - Content-Type and Content-Length for POST requests
         
         Args:
-            method (str): HTTP method (GET, POST)
-            path (str): Request path (e.g., "/fakebook/", "/accounts/login/")
-            body (str, optional): Request body for POST requests
+            method: HTTP method (GET, POST)
+            path: Request path 
+            body: Request body for POST requests
         """
-        # Build HTTP/1.1 request line
         request = f"{method} {path} HTTP/1.1\r\n"
         
-        # Add required HTTP/1.1 headers
         request += f"Host: {self.server}\r\n"
         request += "Connection: close\r\n"
         request += "User-Agent: CS4700-Crawler/1.0\r\n"
         
-        # Add Referer header for POST requests (required for Django CSRF)
         if method == "POST":
             request += f"Referer: https://{self.server}/accounts/login/\r\n"
 
-        # Add Cookie header if we have session cookies
         if self.cookie_jar != {}:
             cookie_strings = []
             for key, value in self.cookie_jar.items():
                 cookie_strings.append(f"{key}={value}")
             request += f"Cookie: {'; '.join(cookie_strings)}\r\n"
 
-        # Add POST-specific headers
         if body: 
             request += f"Content-Length: {len(body)}\r\n"
             request += "Content-Type: application/x-www-form-urlencoded\r\n"
 
-        # End headers section
         request += "\r\n"
 
-        # Add request body for POST requests
         if body:
             request += body
 
-        # Send the complete HTTP request
         self.client.send(request.encode('utf-8'))
 
     def recive_response(self):
@@ -111,7 +100,6 @@ class HttpClient:
                 - body: Response body (str)
                 - location: Redirect URL if present (str or None)
         """
-        # Receive all data until connection closes
         data = b""
         while True:
             chunk = self.client.recv(4096)
@@ -121,10 +109,8 @@ class HttpClient:
         
         decoded_data = data.decode('utf-8')
         
-        # Split headers and body
         headers, _, body = decoded_data.partition('\r\n\r\n')
         
-        # Parse status line
         lines = headers.split("\r\n")
         status_line = lines[0]
         parts = status_line.split(" ")
@@ -133,7 +119,6 @@ class HttpClient:
         else:
             status_code = "Unknown"
         
-        # Extract cookies and location from headers
         location = None
         for line in lines[1:]:
             if line.startswith("set-cookie:"):
@@ -145,7 +130,6 @@ class HttpClient:
             elif line.startswith("Location:"):
                 location = line[10:].strip()
         
-        # Handle chunked transfer encoding (HTTP/1.1 feature)
         if "Transfer-Encoding: chunked" in headers:
             body = self.decode_chunked(body)
         
@@ -165,7 +149,7 @@ class HttpClient:
         The response ends with a 0-size chunk.
         
         Args:
-            body (str): Chunked encoded response body
+            body: Chunked encoded response body
             
         Returns:
             str: Decoded response body
@@ -174,7 +158,6 @@ class HttpClient:
         cursor = 0
         
         while cursor < len(body):
-            # Find chunk size (hexadecimal number followed by \r\n)
             chunk_size_end = body.find('\r\n', cursor)
             if chunk_size_end == -1:
                 break
@@ -186,14 +169,12 @@ class HttpClient:
                 break
                 
             if chunk_size == 0:
-                break  # End of chunks
+                break  
                 
-            # Extract chunk data
             cursor = chunk_size_end + 2
             chunk_data = body[cursor:cursor + chunk_size]
             clean_html += chunk_data
             
-            # Move to next chunk
             cursor += chunk_size + 2
             
         return clean_html
